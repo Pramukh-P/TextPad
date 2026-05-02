@@ -19,7 +19,6 @@ export default function Pad() {
   const [content, setContent] = useState("");
   const [status, setStatus] = useState("saved");
   const [loading, setLoading] = useState(true);
-  // myEmail is stored in localStorage — invisible to other users of this pad
   const [myEmail, setMyEmail] = useState(() => localStorage.getItem(`textpad-email:${id}`) || "");
   const [wordCount, setWordCount] = useState(0);
   const [charCount, setCharCount] = useState(0);
@@ -41,7 +40,6 @@ export default function Pad() {
     setWordCount(text.trim() === "" ? 0 : text.trim().split(/\s+/).length);
   }, []);
 
-  // Re-fetch pad data whenever the pad ID changes (fixes back-navigation stale data)
   useEffect(() => {
     setLoading(true);
     setContent("");
@@ -73,7 +71,6 @@ export default function Pad() {
     localStorage.setItem("recentPads", JSON.stringify(recent));
   }, [id]);
 
-  // Socket: join room on id change, clean up named handlers on leave
   useEffect(() => {
     socket.emit("joinPad", id);
 
@@ -83,7 +80,6 @@ export default function Pad() {
         updateCounts(newContent);
       }
     };
-
     const handleUserCount = (count) => setConnectedUsers(count);
 
     socket.on("update", handleUpdate);
@@ -95,7 +91,6 @@ export default function Pad() {
     };
   }, [id, updateCounts]);
 
-  // Auto-save with debounce — skip while initial data is loading
   useEffect(() => {
     if (loading) return;
     clearTimeout(saveTimerRef.current);
@@ -135,7 +130,6 @@ export default function Pad() {
   const saveEmail = async () => {
     const trimmed = emailInput.trim().toLowerCase();
 
-    // Empty input = remove subscription
     if (!trimmed) {
       if (myEmail) {
         setEmailSaving(true);
@@ -158,7 +152,6 @@ export default function Pad() {
     setEmailSaving(true);
     setEmailError("");
     try {
-      // If they had an old email, remove it first
       if (myEmail && myEmail !== trimmed) {
         await axios.delete(`${API}/api/pad/${id}/email`, { data: { email: myEmail } });
       }
@@ -344,8 +337,8 @@ export default function Pad() {
 
             <div className="modal-body">
               <div className="modal-info-box">
-                <span>⏱</span>
-                <span>You'll get an email <strong>5 minutes before</strong> deletion with all pad contents, and a final email when it's deleted.</span>
+                <span>🗑️</span>
+                <span>You'll get an email when this pad is <strong>deleted</strong>, with a full copy of its contents.</span>
               </div>
 
               <label className="modal-label">Your email address</label>
