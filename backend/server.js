@@ -4,6 +4,7 @@ const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
 const cron = require("node-cron");
+const cron = require("node-cron");
 require("dotenv").config();
 
 const Pad = require("./models/Pad");
@@ -62,7 +63,7 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
   .catch(console.error);
 
-// Send email via Brevo API (HTTPS — works on Render free tier)
+// Send email via Brevo HTTP API (works on Render — uses HTTPS port 443)
 async function sendPadEmail(pad, toEmail, subject, messageIntro) {
   const contentPreview = pad.content
     ? pad.content.substring(0, 5000) + (pad.content.length > 5000 ? "\n\n[Content truncated]" : "")
