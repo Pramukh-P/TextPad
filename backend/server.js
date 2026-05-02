@@ -4,7 +4,6 @@ const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
 const cron = require("node-cron");
-const cron = require("node-cron");
 require("dotenv").config();
 
 const Pad = require("./models/Pad");
