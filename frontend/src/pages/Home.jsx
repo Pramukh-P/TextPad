@@ -1,12 +1,19 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTheme } from "../context/ThemeContext";
 import "./Home.css";
 
 const Home = () => {
   const [padName, setPadName] = useState("");
+  const [recentPads, setRecentPads] = useState([]);
   const navigate = useNavigate();
   const { theme, toggle } = useTheme();
+
+  // Load recent pads
+  useEffect(() => {
+    const stored = JSON.parse(localStorage.getItem("recentPads")) || [];
+    setRecentPads(stored);
+  }, []);
 
   const handleGo = () => {
     const trimmed = padName.trim().replace(/\s+/g, "-");
@@ -18,10 +25,9 @@ const Home = () => {
     if (e.key === "Enter") handleGo();
   };
 
-  const examples = ["meeting-notes", "my-ideas", "grocery-list", "travel-plans"];
-
   return (
     <div className="home">
+      {/* Theme toggle */}
       <button className="theme-toggle-home" onClick={toggle} title="Toggle theme">
         {theme === "dark" ? (
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -38,10 +44,6 @@ const Home = () => {
       </button>
 
       <div className="home-content">
-        {/* <div className="home-badge">✦ No login. No clutter. Just text.</div> */}
-        <div></div>
-        <div></div>
-
         <h1 className="home-title">
           <span className="title-text">TEXT</span>
           <span className="title-accent">PAD</span>
@@ -52,6 +54,7 @@ const Home = () => {
           Auto-deletes in 24 hours.
         </p>
 
+        {/* Input */}
         <div className="input-wrapper">
           <div className="input-row">
             <span className="input-prefix">textpad/</span>
@@ -70,19 +73,34 @@ const Home = () => {
           </div>
         </div>
 
-        {/* <div className="examples-row">
-          <span className="examples-label">Try:</span>
-          {examples.map(ex => (
-            <button
-              key={ex}
-              className="example-chip"
-              onClick={() => navigate(`/${ex}`)}
-            >
-              {ex}
-            </button>
-          ))}
-        </div> */}
+        {/* 🔥 Recently Used */}
+        {recentPads.length > 0 && (
+          <div className="examples-row">
+            <span className="examples-label">Recently used:</span>
 
+            {recentPads.map((pad) => (
+              <button
+                key={pad}
+                className="example-chip"
+                onClick={() => navigate(`/${pad}`)}
+              >
+                {pad}
+              </button>
+            ))}
+
+            <button
+              className="clear-btn"
+              onClick={() => {
+                localStorage.removeItem("recentPads");
+                setRecentPads([]);
+              }}
+            >
+              Clear
+            </button>
+          </div>
+        )}
+
+        {/* Features */}
         <div className="features-grid">
           <div className="feature-card">
             <span className="feature-icon">⚡</span>
@@ -115,3 +133,4 @@ const Home = () => {
 };
 
 export default Home;
+      

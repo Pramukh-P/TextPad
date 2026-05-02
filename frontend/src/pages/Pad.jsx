@@ -60,6 +60,26 @@ export default function Pad() {
       .catch(() => setLoading(false));
   }, [id, updateCounts]);
 
+  // Save to Recently Used
+  useEffect(() => {
+    if (!id) return;
+
+    let recent = JSON.parse(localStorage.getItem("recentPads")) || [];
+
+    // remove duplicate
+    recent = recent.filter(p => p !== id);
+
+    // add to top
+    recent.unshift(id);
+
+    // limit to 5 items
+    if (recent.length > 5) {
+      recent = recent.slice(0, 5);
+    }
+
+    localStorage.setItem("recentPads", JSON.stringify(recent));
+  }, [id]);
+
   // Socket
   useEffect(() => {
     const s = getSocket();

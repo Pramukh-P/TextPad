@@ -242,3 +242,20 @@
   .features-grid { grid-template-columns: 1fr 1fr; }
   .input-prefix { display: none; }
 }
+
+
+.clear-btn {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  transition: all var(--transition);
+}
+
+.clear-btn:hover {
+  border-color: #ef4444;
+  color: #ef4444;
+}
