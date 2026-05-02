@@ -2,14 +2,16 @@ const express = require("express");
 const router = express.Router();
 const Pad = require("../models/Pad");
 
-// GET / CREATE pad
+// GET / CREATE pad — never expose the emails array to the client
 router.get("/:id", async (req, res) => {
   try {
     let pad = await Pad.findOne({ padId: req.params.id });
     if (!pad) {
       pad = await Pad.create({ padId: req.params.id });
     }
-    res.json(pad);
+    // Strip the emails list — each user tracks their own email in localStorage
+    const { emails, ...safe } = pad.toObject();
+    res.json(safe);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -21,37 +23,41 @@ router.post("/:id", async (req, res) => {
     const pad = await Pad.findOneAndUpdate(
       { padId: req.params.id },
       { content: req.body.content },
-      { returnDocument: "after", upsert: true } // ✅ fixed
+      { new: true, upsert: true }
     );
-    res.json(pad);
+    const { emails, ...safe } = pad.toObject();
+    res.json(safe);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// SAVE email
+// ADD an email to the pad's subscriber list (no duplicates)
 router.post("/:id/email", async (req, res) => {
   try {
-    const pad = await Pad.findOneAndUpdate(
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: "Email required" });
+    await Pad.findOneAndUpdate(
       { padId: req.params.id },
-      { email: req.body.email },
-      { returnDocument: "after" } // ✅ fixed
+      { $addToSet: { emails: email.toLowerCase().trim() } },
+      { new: true }
     );
-    res.json(pad);
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// DELETE email (unsubscribe)
+// REMOVE a specific email from the list
 router.delete("/:id/email", async (req, res) => {
   try {
-    const pad = await Pad.findOneAndUpdate(
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: "Email required" });
+    await Pad.findOneAndUpdate(
       { padId: req.params.id },
-      { email: null, warningSent: false, deletionEmailSent: false },
-      { returnDocument: "after" } // ✅ fixed
+      { $pull: { emails: email.toLowerCase().trim() } }
     );
-    res.json(pad);
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

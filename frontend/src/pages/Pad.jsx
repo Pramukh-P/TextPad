@@ -8,14 +8,8 @@ import "./Pad.css";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
-let socket;
-
-function getSocket() {
-  if (!socket) {
-    socket = io(API, { transports: ["websocket", "polling"] });
-  }
-  return socket;
-}
+// Stable singleton socket — created once when module loads, reused on navigation
+const socket = io(API, { transports: ["websocket", "polling"] });
 
 export default function Pad() {
   const { id } = useParams();
@@ -23,9 +17,10 @@ export default function Pad() {
   const { theme, toggle } = useTheme();
 
   const [content, setContent] = useState("");
-  const [status, setStatus] = useState("saved"); // "saved" | "saving" | "error"
+  const [status, setStatus] = useState("saved");
   const [loading, setLoading] = useState(true);
-  const [padEmail, setPadEmail] = useState(null);
+  // myEmail is stored in localStorage — invisible to other users of this pad
+  const [myEmail, setMyEmail] = useState(() => localStorage.getItem(`textpad-email:${id}`) || "");
   const [wordCount, setWordCount] = useState(0);
   const [charCount, setCharCount] = useState(0);
   const [expiresAt, setExpiresAt] = useState(null);
@@ -41,66 +36,56 @@ export default function Pad() {
   const isTypingRef = useRef(false);
   const saveTimerRef = useRef(null);
 
-  // Counts
   const updateCounts = useCallback((text) => {
     setCharCount(text.length);
     setWordCount(text.trim() === "" ? 0 : text.trim().split(/\s+/).length);
   }, []);
 
-  // Fetch pad
+  // Re-fetch pad data whenever the pad ID changes (fixes back-navigation stale data)
   useEffect(() => {
+    setLoading(true);
+    setContent("");
+    setMyEmail(localStorage.getItem(`textpad-email:${id}`) || "");
+    setExpiresAt(null);
+    setStatus("saved");
+    updateCounts("");
+
     axios.get(`${API}/api/pad/${id}`)
       .then(res => {
         setContent(res.data.content || "");
-        setPadEmail(res.data.email || null);
         setExpiresAt(res.data.expiresAt);
         updateCounts(res.data.content || "");
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(() => {
+        setLoading(false);
+        setStatus("error");
+      });
   }, [id, updateCounts]);
 
-  // Save to Recently Used
+  // Socket: join room on id change, clean up named handlers on leave
   useEffect(() => {
-    if (!id) return;
+    socket.emit("joinPad", id);
 
-    let recent = JSON.parse(localStorage.getItem("recentPads")) || [];
-
-    // remove duplicate
-    recent = recent.filter(p => p !== id);
-
-    // add to top
-    recent.unshift(id);
-
-    // limit to 5 items
-    if (recent.length > 5) {
-      recent = recent.slice(0, 5);
-    }
-
-    localStorage.setItem("recentPads", JSON.stringify(recent));
-  }, [id]);
-
-  // Socket
-  useEffect(() => {
-    const s = getSocket();
-    s.emit("joinPad", id);
-
-    s.on("update", (newContent) => {
+    const handleUpdate = (newContent) => {
       if (!isTypingRef.current) {
         setContent(newContent);
         updateCounts(newContent);
       }
-    });
+    };
 
-    s.on("userCount", (count) => setConnectedUsers(count));
+    const handleUserCount = (count) => setConnectedUsers(count);
+
+    socket.on("update", handleUpdate);
+    socket.on("userCount", handleUserCount);
 
     return () => {
-      s.off("update");
-      s.off("userCount");
+      socket.off("update", handleUpdate);
+      socket.off("userCount", handleUserCount);
     };
   }, [id, updateCounts]);
 
-  // Auto-save debounce
+  // Auto-save with debounce — skip while initial data is loading
   useEffect(() => {
     if (loading) return;
     clearTimeout(saveTimerRef.current);
@@ -118,7 +103,7 @@ export default function Pad() {
     isTypingRef.current = true;
     setContent(val);
     updateCounts(val);
-    getSocket().emit("typing", { padId: id, content: val });
+    socket.emit("typing", { padId: id, content: val });
     clearTimeout(isTypingRef._timer);
     isTypingRef._timer = setTimeout(() => { isTypingRef.current = false; }, 600);
   };
@@ -129,9 +114,8 @@ export default function Pad() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Email modal
   const openEmailModal = () => {
-    setEmailInput(padEmail || "");
+    setEmailInput(myEmail);
     setEmailError("");
     setShowEmailModal(true);
   };
@@ -139,24 +123,38 @@ export default function Pad() {
   const validateEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 
   const saveEmail = async () => {
-    if (!emailInput.trim()) {
-      // Remove email
-      setEmailSaving(true);
-      await axios.delete(`${API}/api/pad/${id}/email`);
-      setPadEmail(null);
-      setEmailSaving(false);
+    const trimmed = emailInput.trim().toLowerCase();
+
+    // Empty input = remove subscription
+    if (!trimmed) {
+      if (myEmail) {
+        setEmailSaving(true);
+        try {
+          await axios.delete(`${API}/api/pad/${id}/email`, { data: { email: myEmail } });
+        } catch { /* best effort */ }
+        localStorage.removeItem(`textpad-email:${id}`);
+        setMyEmail("");
+        setEmailSaving(false);
+      }
       setShowEmailModal(false);
       return;
     }
-    if (!validateEmail(emailInput)) {
+
+    if (!validateEmail(trimmed)) {
       setEmailError("Please enter a valid email address.");
       return;
     }
+
     setEmailSaving(true);
     setEmailError("");
     try {
-      await axios.post(`${API}/api/pad/${id}/email`, { email: emailInput });
-      setPadEmail(emailInput);
+      // If they had an old email, remove it first
+      if (myEmail && myEmail !== trimmed) {
+        await axios.delete(`${API}/api/pad/${id}/email`, { data: { email: myEmail } });
+      }
+      await axios.post(`${API}/api/pad/${id}/email`, { email: trimmed });
+      localStorage.setItem(`textpad-email:${id}`, trimmed);
+      setMyEmail(trimmed);
       setShowEmailModal(false);
     } catch {
       setEmailError("Failed to save email. Try again.");
@@ -166,8 +164,11 @@ export default function Pad() {
 
   const removeEmail = async () => {
     setEmailSaving(true);
-    await axios.delete(`${API}/api/pad/${id}/email`);
-    setPadEmail(null);
+    try {
+      await axios.delete(`${API}/api/pad/${id}/email`, { data: { email: myEmail } });
+    } catch { /* best effort */ }
+    localStorage.removeItem(`textpad-email:${id}`);
+    setMyEmail("");
     setEmailSaving(false);
     setShowEmailModal(false);
   };
@@ -186,7 +187,6 @@ export default function Pad() {
 
   return (
     <div className="pad-page">
-      {/* Header */}
       <header className="pad-header">
         <div className="header-left">
           <button className="icon-btn" onClick={() => navigate("/")} title="Home">
@@ -202,7 +202,6 @@ export default function Pad() {
         </div>
 
         <div className="header-right">
-          {/* Status */}
           <span className={`status-badge ${status}`}>
             {status === "saving" && <span className="saving-spinner"></span>}
             {status === "saved" && "✓ Saved"}
@@ -210,21 +209,19 @@ export default function Pad() {
             {status === "error" && "⚠ Error"}
           </span>
 
-          {/* Notify button */}
           <button
-            className={`header-btn ${padEmail ? "active" : ""}`}
+            className={`header-btn ${myEmail ? "active" : ""}`}
             onClick={openEmailModal}
-            title={padEmail ? `Notifications: ${padEmail}` : "Get email backup"}
+            title={myEmail ? `Your backup: ${myEmail}` : "Get email backup"}
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill={padEmail ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill={myEmail ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
               <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
             </svg>
-            <span>{padEmail ? "Notify" : "Notify"}</span>
-            {padEmail && <span className="active-dot"></span>}
+            <span>Notify</span>
+            {myEmail && <span className="active-dot"></span>}
           </button>
 
-          {/* Copy link */}
           <button className="header-btn" onClick={copyLink} title="Copy link">
             {copied ? (
               <>
@@ -244,7 +241,6 @@ export default function Pad() {
             )}
           </button>
 
-          {/* Info */}
           <button className="icon-btn" onClick={() => setShowInfo(v => !v)} title="Info">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10"/>
@@ -253,7 +249,6 @@ export default function Pad() {
             </svg>
           </button>
 
-          {/* Theme toggle */}
           <button className="icon-btn" onClick={toggle} title="Toggle theme">
             {theme === "dark" ? (
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -272,7 +267,6 @@ export default function Pad() {
         </div>
       </header>
 
-      {/* Info dropdown */}
       {showInfo && (
         <div className="info-panel" onClick={() => setShowInfo(false)}>
           <div className="info-card" onClick={e => e.stopPropagation()}>
@@ -289,14 +283,13 @@ export default function Pad() {
               <span className="info-value expire-warn">{getTimeLeft() || "—"}</span>
             </div>
             <div className="info-row">
-              <span className="info-label">Notify</span>
-              <span className="info-value">{padEmail || "Not set"}</span>
+              <span className="info-label">Your notify</span>
+              <span className="info-value">{myEmail || "Not set"}</span>
             </div>
           </div>
         </div>
       )}
 
-      {/* Textarea */}
       <textarea
         ref={textareaRef}
         value={content}
@@ -306,7 +299,6 @@ export default function Pad() {
         spellCheck={true}
       />
 
-      {/* Footer bar */}
       <footer className="pad-footer">
         <span className="footer-stat">{wordCount} words</span>
         <span className="footer-dot">·</span>
@@ -324,7 +316,6 @@ export default function Pad() {
         )}
       </footer>
 
-      {/* Email Modal */}
       {showEmailModal && (
         <div className="modal-overlay" onClick={() => setShowEmailModal(false)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
@@ -332,7 +323,7 @@ export default function Pad() {
               <div className="modal-icon">📧</div>
               <div>
                 <h2 className="modal-title">Email Backup</h2>
-                <p className="modal-subtitle">Get notified & receive pad contents before deletion</p>
+                <p className="modal-subtitle">Only you can see this — other users set their own</p>
               </div>
               <button className="modal-close" onClick={() => setShowEmailModal(false)}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -344,7 +335,7 @@ export default function Pad() {
             <div className="modal-body">
               <div className="modal-info-box">
                 <span>⏱</span>
-                <span>You'll get an email <strong>5 minutes before</strong> deletion with all your pad contents, and a final email when it's deleted.</span>
+                <span>You'll get an email <strong>5 minutes before</strong> deletion with all pad contents, and a final email when it's deleted.</span>
               </div>
 
               <label className="modal-label">Your email address</label>
@@ -360,7 +351,7 @@ export default function Pad() {
               {emailError && <span className="modal-error">{emailError}</span>}
 
               <div className="modal-actions">
-                {padEmail && (
+                {myEmail && (
                   <button className="btn-danger" onClick={removeEmail} disabled={emailSaving}>
                     Remove
                   </button>
@@ -369,7 +360,7 @@ export default function Pad() {
                   Cancel
                 </button>
                 <button className="btn-primary" onClick={saveEmail} disabled={emailSaving}>
-                  {emailSaving ? "Saving..." : padEmail ? "Update" : "Save"}
+                  {emailSaving ? "Saving..." : myEmail ? "Update" : "Save"}
                 </button>
               </div>
             </div>

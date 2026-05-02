@@ -4,7 +4,6 @@ const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
 const cron = require("node-cron");
-const nodemailer = require("nodemailer");
 require("dotenv").config();
 
 const Pad = require("./models/Pad");
@@ -14,8 +13,21 @@ const app = express();
 const server = http.createServer(app);
 
 // Middleware
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:5173",
+].filter(Boolean);
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "*",
+  origin: (origin, callback) => {
+    // Allow requests with no origin (curl, Postman, server-to-server)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error(`CORS blocked: ${origin}`));
+  },
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true
 }));
@@ -50,24 +62,10 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
   .catch(console.error);
 
-// Email transporter
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.EMAIL,
-    pass: process.env.EMAIL_PASSWORD
-  },
-  connectionTimeout: 10000,
-  greetingTimeout: 10000,
-  socketTimeout: 10000
-});
-
-// Helper: send pad content email
-async function sendPadEmail(pad, subject, messageIntro) {
+// Send email via Resend API (works on Render free tier — no SMTP port blocking)
+async function sendPadEmail(pad, toEmail, subject, messageIntro) {
   const contentPreview = pad.content
-    ? pad.content.substring(0, 5000) + (pad.content.length > 5000 ? "\n\n[Content truncated — pad had more text]" : "")
+    ? pad.content.substring(0, 5000) + (pad.content.length > 5000 ? "\n\n[Content truncated]" : "")
     : "(This pad was empty)";
 
   const html = `
@@ -84,7 +82,7 @@ async function sendPadEmail(pad, subject, messageIntro) {
         .body { padding: 32px; }
         .intro { color: #374151; font-size: 15px; margin-bottom: 24px; line-height: 1.6; font-family: Arial, sans-serif; }
         .pad-id { display: inline-block; background: #ecfdf5; color: #065f46; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; margin-bottom: 20px; }
-        .content-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; white-space: pre-wrap; word-break: break-word; font-size: 14px; color: #1e293b; line-height: 1.7; max-height: 400px; overflow-y: auto; }
+        .content-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; white-space: pre-wrap; word-break: break-word; font-size: 14px; color: #1e293b; line-height: 1.7; }
         .footer { background: #f9fafb; padding: 20px 32px; border-top: 1px solid #f0f0f0; text-align: center; color: #9ca3af; font-size: 12px; font-family: Arial, sans-serif; }
       </style>
     </head>
@@ -97,79 +95,89 @@ async function sendPadEmail(pad, subject, messageIntro) {
         <div class="body">
           <p class="intro">${messageIntro}</p>
           <div class="pad-id">📄 ${pad.padId}</div>
-          <div class="content-box">${contentPreview || "(Empty pad)"}</div>
+          <div class="content-box">${contentPreview}</div>
         </div>
-        <div class="footer">
-          TextPad — text lives here, briefly. This is an automated message.
-        </div>
+        <div class="footer">TextPad — text lives here, briefly.</div>
       </div>
     </body>
     </html>
   `;
 
-  await transporter.sendMail({
-    from: `"TextPad" <${process.env.EMAIL}>`,
-    to: pad.email,
-    subject,
-    html
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: "TextPad <onboarding@resend.dev>",
+      to: toEmail,
+      subject,
+      html
+    })
   });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Resend API error: ${res.status} — ${err}`);
+  }
 }
 
-// Cron: every minute — check for pads expiring in ~5 min and send warning email
+// Cron: every minute
 cron.schedule("* * * * *", async () => {
   const now = new Date();
   const fiveMinutesLater = new Date(now.getTime() + 5 * 60 * 1000);
   const fourMinutesLater = new Date(now.getTime() + 4 * 60 * 1000);
 
   try {
-    // Warning: expiring in 4–5 minutes, not yet warned
+    // Warning: expiring in 4–5 minutes, not yet warned, has at least one subscriber
     const warningPads = await Pad.find({
       expiresAt: { $lte: fiveMinutesLater, $gte: fourMinutesLater },
-      email: { $exists: true, $ne: null },
+      emails: { $exists: true, $not: { $size: 0 } },
       warningSent: { $ne: true }
     });
 
     for (let pad of warningPads) {
-      await sendPadEmail(
-        pad,
-        `⚠️ Your TextPad "${pad.padId}" is expiring in 5 minutes`,
-        `Your TextPad <strong>"${pad.padId}"</strong> will be permanently deleted in approximately <strong>5 minutes</strong>. Here's a copy of its contents for your records:`
-      );
+      for (let email of pad.emails) {
+        await sendPadEmail(
+          pad,
+          email,
+          `⚠️ Your TextPad "${pad.padId}" is expiring in 5 minutes`,
+          `Your TextPad <strong>"${pad.padId}"</strong> will be permanently deleted in approximately <strong>5 minutes</strong>. Here's a copy of its contents for your records:`
+        );
+      }
       await Pad.findByIdAndUpdate(pad._id, { warningSent: true });
-      console.log(`Warning email sent for pad: ${pad.padId}`);
+      console.log(`Warning emails sent for pad: ${pad.padId} → [${pad.emails.join(", ")}]`);
     }
 
-    // Final: pads that have already expired — send final email then delete
+    // Final: expired pads — send deletion email to all subscribers then delete
     const expiredPads = await Pad.find({
       expiresAt: { $lte: now },
-      email: { $exists: true, $ne: null },
+      emails: { $exists: true, $not: { $size: 0 } },
       deletionEmailSent: { $ne: true }
     });
 
     for (let pad of expiredPads) {
-      await sendPadEmail(
-        pad,
-        `🗑️ Your TextPad "${pad.padId}" has been deleted`,
-        `Your TextPad <strong>"${pad.padId}"</strong> has now been permanently deleted. Here is a final copy of its contents:`
-      );
+      for (let email of pad.emails) {
+        await sendPadEmail(
+          pad,
+          email,
+          `🗑️ Your TextPad "${pad.padId}" has been deleted`,
+          `Your TextPad <strong>"${pad.padId}"</strong> has now been permanently deleted. Here is a final copy of its contents:`
+        );
+      }
       await Pad.findByIdAndUpdate(pad._id, { deletionEmailSent: true });
-      console.log(`Deletion email sent for pad: ${pad.padId}`);
+      console.log(`Deletion emails sent for pad: ${pad.padId}`);
     }
 
-    // Clean up expired pads that had their deletion email sent (or have no email)
-    const toDelete = await Pad.find({
+    // Clean up all expired pads (emails sent or no subscribers)
+    await Pad.deleteMany({
       expiresAt: { $lte: now },
       $or: [
-        { email: { $exists: false } },
-        { email: null },
+        { emails: { $size: 0 } },
         { deletionEmailSent: true }
       ]
     });
-
-    for (let pad of toDelete) {
-      await Pad.findByIdAndDelete(pad._id);
-      console.log(`Deleted pad: ${pad.padId}`);
-    }
 
   } catch (err) {
     console.error("Cron error:", err);

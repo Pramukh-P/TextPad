@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 const padSchema = new mongoose.Schema({
   padId: { type: String, required: true, unique: true },
   content: { type: String, default: "" },
-  email: { type: String, default: null },
+  emails: { type: [String], default: [] },
   expiresAt: {
     type: Date,
     default: () => new Date(Date.now() + 24 * 60 * 60 * 1000)
