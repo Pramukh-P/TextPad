@@ -335,7 +335,7 @@ export default function Pad() {
             <div className="modal-body">
               <div className="modal-info-box">
                 <span>⏱</span>
-                <span>You'll get an email <strong>5 minutes before</strong> deletion with all pad contents, and a final email when it's deleted.</span>
+                <span>You'll get an email when this pad is <strong>deleted</strong>, with a full copy of its contents.</span>
               </div>
 
               <label className="modal-label">Your email address</label>

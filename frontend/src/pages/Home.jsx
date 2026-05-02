@@ -9,10 +9,15 @@ const Home = () => {
   const navigate = useNavigate();
   const { theme, toggle } = useTheme();
 
-  // Load recent pads
+  // Load recent pads — also refresh when window regains focus (e.g. after returning from a pad)
   useEffect(() => {
-    const stored = JSON.parse(localStorage.getItem("recentPads")) || [];
-    setRecentPads(stored);
+    const load = () => {
+      const stored = JSON.parse(localStorage.getItem("recentPads")) || [];
+      setRecentPads(stored);
+    };
+    load();
+    window.addEventListener("focus", load);
+    return () => window.removeEventListener("focus", load);
   }, []);
 
   const handleGo = () => {
@@ -50,7 +55,7 @@ const Home = () => {
         </h1>
 
         <p className="home-subtitle">
-          Instant shareable notepads Pick a name start writing.<br />
+          Instant shareable notepads. Pick a name, start writing.<br />
           Auto-deletes in 24 hours.
         </p>
 
@@ -73,7 +78,7 @@ const Home = () => {
           </div>
         </div>
 
-        {/* 🔥 Recently Used */}
+        {/* Recently Used */}
         {recentPads.length > 0 && (
           <div className="examples-row">
             <span className="examples-label">Recently used:</span>
@@ -133,4 +138,3 @@ const Home = () => {
 };
 
 export default Home;
-      

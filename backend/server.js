@@ -4,6 +4,7 @@ const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
 const cron = require("node-cron");
+const nodemailer = require("nodemailer");
 require("dotenv").config();
 
 const Pad = require("./models/Pad");
@@ -62,7 +63,16 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
   .catch(console.error);
 
-// Send email via Resend API (works on Render free tier — no SMTP port blocking)
+// Gmail SMTP transporter
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL,
+    pass: process.env.EMAIL_PASSWORD  // Gmail App Password (16 chars)
+  }
+});
+
+// Send email via Gmail SMTP
 async function sendPadEmail(pad, toEmail, subject, messageIntro) {
   const contentPreview = pad.content
     ? pad.content.substring(0, 5000) + (pad.content.length > 5000 ? "\n\n[Content truncated]" : "")
@@ -103,54 +113,20 @@ async function sendPadEmail(pad, toEmail, subject, messageIntro) {
     </html>
   `;
 
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      from: "TextPad <onboarding@resend.dev>",
-      to: toEmail,
-      subject,
-      html
-    })
+  await transporter.sendMail({
+    from: `"TextPad" <${process.env.EMAIL}>`,
+    to: toEmail,
+    subject,
+    html
   });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Resend API error: ${res.status} — ${err}`);
-  }
 }
 
 // Cron: every minute
 cron.schedule("* * * * *", async () => {
   const now = new Date();
-  const fiveMinutesLater = new Date(now.getTime() + 5 * 60 * 1000);
-  const fourMinutesLater = new Date(now.getTime() + 4 * 60 * 1000);
 
   try {
-    // Warning: expiring in 4–5 minutes, not yet warned, has at least one subscriber
-    const warningPads = await Pad.find({
-      expiresAt: { $lte: fiveMinutesLater, $gte: fourMinutesLater },
-      emails: { $exists: true, $not: { $size: 0 } },
-      warningSent: { $ne: true }
-    });
-
-    for (let pad of warningPads) {
-      for (let email of pad.emails) {
-        await sendPadEmail(
-          pad,
-          email,
-          `⚠️ Your TextPad "${pad.padId}" is expiring in 5 minutes`,
-          `Your TextPad <strong>"${pad.padId}"</strong> will be permanently deleted in approximately <strong>5 minutes</strong>. Here's a copy of its contents for your records:`
-        );
-      }
-      await Pad.findByIdAndUpdate(pad._id, { warningSent: true });
-      console.log(`Warning emails sent for pad: ${pad.padId} → [${pad.emails.join(", ")}]`);
-    }
-
-    // Final: expired pads — send deletion email to all subscribers then delete
+    // Find expired pads that have subscribers and haven't been emailed yet
     const expiredPads = await Pad.find({
       expiresAt: { $lte: now },
       emails: { $exists: true, $not: { $size: 0 } },
@@ -158,26 +134,22 @@ cron.schedule("* * * * *", async () => {
     });
 
     for (let pad of expiredPads) {
+      // Mark FIRST before sending — prevents duplicate sends if cron overlaps
+      await Pad.findByIdAndUpdate(pad._id, { deletionEmailSent: true });
+
       for (let email of pad.emails) {
         await sendPadEmail(
           pad,
           email,
           `🗑️ Your TextPad "${pad.padId}" has been deleted`,
-          `Your TextPad <strong>"${pad.padId}"</strong> has now been permanently deleted. Here is a final copy of its contents:`
+          `Your TextPad <strong>"${pad.padId}"</strong> has been permanently deleted. Here is a copy of its contents:`
         );
       }
-      await Pad.findByIdAndUpdate(pad._id, { deletionEmailSent: true });
-      console.log(`Deletion emails sent for pad: ${pad.padId}`);
+      console.log(`Deletion email sent for pad: ${pad.padId} → [${pad.emails.join(", ")}]`);
     }
 
-    // Clean up all expired pads (emails sent or no subscribers)
-    await Pad.deleteMany({
-      expiresAt: { $lte: now },
-      $or: [
-        { emails: { $size: 0 } },
-        { deletionEmailSent: true }
-      ]
-    });
+    // Delete all expired pads (with or without subscribers)
+    await Pad.deleteMany({ expiresAt: { $lte: now } });
 
   } catch (err) {
     console.error("Cron error:", err);
