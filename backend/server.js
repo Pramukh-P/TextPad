@@ -4,7 +4,6 @@ const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
 const cron = require("node-cron");
-const nodemailer = require("nodemailer");
 require("dotenv").config();
 
 const Pad = require("./models/Pad");
@@ -63,16 +62,7 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
   .catch(console.error);
 
-// Gmail SMTP transporter
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL,
-    pass: process.env.EMAIL_PASSWORD  // Gmail App Password (16 chars)
-  }
-});
-
-// Send email via Gmail SMTP
+// Send email via Brevo API (HTTPS — works on Render free tier)
 async function sendPadEmail(pad, toEmail, subject, messageIntro) {
   const contentPreview = pad.content
     ? pad.content.substring(0, 5000) + (pad.content.length > 5000 ? "\n\n[Content truncated]" : "")
@@ -113,12 +103,24 @@ async function sendPadEmail(pad, toEmail, subject, messageIntro) {
     </html>
   `;
 
-  await transporter.sendMail({
-    from: `"TextPad" <${process.env.EMAIL}>`,
-    to: toEmail,
-    subject,
-    html
+  const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: {
+      "api-key": process.env.BREVO_API_KEY,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      sender: { name: "TextPad", email: process.env.BREVO_SENDER_EMAIL },
+      to: [{ email: toEmail }],
+      subject,
+      htmlContent: html
+    })
   });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Brevo API error: ${res.status} — ${err}`);
+  }
 }
 
 // Cron: every minute

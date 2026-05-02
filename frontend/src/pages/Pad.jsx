@@ -63,6 +63,16 @@ export default function Pad() {
       });
   }, [id, updateCounts]);
 
+  // Save to Recently Used
+  useEffect(() => {
+    if (!id) return;
+    let recent = JSON.parse(localStorage.getItem("recentPads")) || [];
+    recent = recent.filter(p => p !== id);
+    recent.unshift(id);
+    if (recent.length > 5) recent = recent.slice(0, 5);
+    localStorage.setItem("recentPads", JSON.stringify(recent));
+  }, [id]);
+
   // Socket: join room on id change, clean up named handlers on leave
   useEffect(() => {
     socket.emit("joinPad", id);
@@ -335,7 +345,7 @@ export default function Pad() {
             <div className="modal-body">
               <div className="modal-info-box">
                 <span>⏱</span>
-                <span>You'll get an email when this pad is <strong>deleted</strong>, with a full copy of its contents.</span>
+                <span>You'll get an email <strong>5 minutes before</strong> deletion with all pad contents, and a final email when it's deleted.</span>
               </div>
 
               <label className="modal-label">Your email address</label>
