@@ -53,6 +53,25 @@ export default function Pad() {
         setContent(res.data.content || "");
         setExpiresAt(res.data.expiresAt);
         updateCounts(res.data.content || "");
+
+        // Check if the stored email belongs to a previous (now deleted) version of this pad.
+        // We do this by comparing the stored expiry with the current pad's expiry.
+        // If they differ, a new pad was created — clear the stale email.
+        const storedExpiry = localStorage.getItem(`textpad-expiry:${id}`);
+        const currentExpiry = res.data.expiresAt;
+
+        if (storedExpiry && storedExpiry !== currentExpiry) {
+          // New pad generation — wipe old email subscription
+          localStorage.removeItem(`textpad-email:${id}`);
+          localStorage.removeItem(`textpad-expiry:${id}`);
+          setMyEmail("");
+        }
+
+        // Always keep expiry in sync
+        if (currentExpiry) {
+          localStorage.setItem(`textpad-expiry:${id}`, currentExpiry);
+        }
+
         setLoading(false);
       })
       .catch(() => {
@@ -137,6 +156,7 @@ export default function Pad() {
           await axios.delete(`${API}/api/pad/${id}/email`, { data: { email: myEmail } });
         } catch { /* best effort */ }
         localStorage.removeItem(`textpad-email:${id}`);
+        localStorage.removeItem(`textpad-expiry:${id}`);
         setMyEmail("");
         setEmailSaving(false);
       }
@@ -157,6 +177,7 @@ export default function Pad() {
       }
       await axios.post(`${API}/api/pad/${id}/email`, { email: trimmed });
       localStorage.setItem(`textpad-email:${id}`, trimmed);
+      if (expiresAt) localStorage.setItem(`textpad-expiry:${id}`, expiresAt);
       setMyEmail(trimmed);
       setShowEmailModal(false);
     } catch {
@@ -171,6 +192,7 @@ export default function Pad() {
       await axios.delete(`${API}/api/pad/${id}/email`, { data: { email: myEmail } });
     } catch { /* best effort */ }
     localStorage.removeItem(`textpad-email:${id}`);
+    localStorage.removeItem(`textpad-expiry:${id}`);
     setMyEmail("");
     setEmailSaving(false);
     setShowEmailModal(false);
